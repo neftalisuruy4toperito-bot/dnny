@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Noche estrellada</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,300;1,400&display=swap" rel="stylesheet">
+<style>
+  /* ===== Tokens ===== */
+  :root {
+    --void: #03030a;
+    --night: #0a0c1f;
+    --violet: #8b7bff;
+    --moonlight: #eef0ff;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    background: radial-gradient(ellipse at 50% 40%, var(--night) 0%, var(--void) 70%);
+    color: var(--moonlight);
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ===== Frase principal ===== */
+  .phrase {
+    position: fixed; left: 0; right: 0;
+    bottom: calc(9vh + env(safe-area-inset-bottom, 0px));
+    margin: 0 auto; padding: 0 8vw; max-width: 900px;
+    text-align: center; pointer-events: none;
+    font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+    font-style: italic; font-weight: 300;
+    font-size: clamp(1.45rem, 4.2vw, 2.9rem);
+    line-height: 1.35; letter-spacing: .02em;
+    color: var(--moonlight);
+    text-shadow: 0 0 12px rgba(190,200,255,.55), 0 0 36px rgba(139,123,255,.45);
+    opacity: 0; filter: blur(10px);
+    animation: reveal 4.5s ease-out 1.6s forwards, glow 7s ease-in-out 6s infinite;
+  }
+  @keyframes reveal { to { opacity: 1; filter: blur(0); } }
+  @keyframes glow {
+    50% { text-shadow: 0 0 16px rgba(210,215,255,.75), 0 0 52px rgba(139,123,255,.65); }
+  }
+
+  /* ===== Chispas al hacer clic ===== */
+  .spark {
+    position: fixed; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
+    border-radius: 50%; pointer-events: none;
+    background: #fff; box-shadow: 0 0 10px 2px rgba(170,155,255,.9);
+    animation: spark 1.6s ease-out forwards;
+  }
+  @keyframes spark {
+    to { transform: translate(var(--dx), var(--dy)) scale(.1); opacity: 0; }
+  }
+
+  /* Fundido inicial de la escena */
+  .veil { position: fixed; inset: 0; background: var(--void); pointer-events: none;
+    animation: lift 3s ease-out .2s forwards; }
+  @keyframes lift { to { opacity: 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .phrase { animation: reveal 1s ease-out forwards; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<p class="phrase">Tú eres especial para mí y para muchas personas más</p>
+<div class="veil"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  /* ================= Utilidades de ruido (para la textura lunar) ================= */
+  const hash = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+  function vnoise(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  }
+  function fbm(x, y, oct) {
+    let v = 0, amp = .5, f = 1;
+    for (let i = 0; i < oct; i++) { v += amp * vnoise(x * f, y * f); f *= 2; amp *= .5; }
+    return v;
+  }
+
+  /* ================= Textura procedural de la Luna (color + relieve) ================= */
+  function buildMoonTextures() {
+    const W = 1024, H = 512;
+    const color = document.createElement('canvas'), bump = document.createElement('canvas');
+    color.width = bump.width = W; color.height = bump.height = H;
+    const cc = color.getContext('2d'), bc = bump.getContext('2d');
+    const cImg = cc.createImageData(W, H), bImg = bc.createImageData(W, H);
+
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const nx = x / W, ny = y / H;
+        const rough = fbm(nx * 24, ny * 12, 5);          // grano fino
+        const maria = fbm(nx * 4 + 7, ny * 2 + 3, 4);    // mares oscuros
+        const dark = Math.max(0, (maria - .52) * 2.4);   // zonas basálticas
+        const g = 150 + rough * 70 - dark * 55;
+        const i = (y * W + x) * 4;
+        cImg.data[i] = g * 1.0; cImg.data[i + 1] = g * .98; cImg.data[i + 2] = g * .94; cImg.data[i + 3] = 255;
+        const h = 110 + rough * 90 - dark * 25;
+        bImg.data[i] = bImg.data[i + 1] = bImg.data[i + 2] = h; bImg.data[i + 3] = 255;
+      }
+    }
+    cc.putImageData(cImg, 0, 0); bc.putImageData(bImg, 0, 0);
+
+    // Cráteres: más pequeños son más abundantes
+    const craters = [];
+    for (let i = 0; i < 140; i++) {
+      const r = 3 + Math.pow(Math.random(), 3.5) * 28;
+      craters.push({ x: Math.random() * W, y: H * .08 + Math.random() * H * .84, r });
+    }
+    craters.forEach(({ x, y, r }) => {
+      const lat = (y / H - .5) * Math.PI;
+      const stretch = 1 / Math.max(.3, Math.cos(lat));  // compensa la deformación equirectangular
+      [-W, 0, W].forEach(off => {
+        // Color: interior sombreado, borde claro
+        paint(cc, x + off, y, r, stretch, [
+          [0, 'rgba(40,38,36,.38)'], [.7, 'rgba(60,58,55,.18)'],
+          [.86, 'rgba(235,232,225,.38)'], [1, 'rgba(0,0,0,0)']]);
+        // Relieve: hueco central, anillo elevado
+        paint(bc, x + off, y, r, stretch, [
+          [0, 'rgba(0,0,0,.65)'], [.75, 'rgba(0,0,0,.3)'],
+          [.88, 'rgba(255,255,255,.7)'], [1, 'rgba(255,255,255,0)']]);
+      });
+    });
+    function paint(ctx, x, y, r, sx, stops) {
+      ctx.save(); ctx.translate(x, y); ctx.scale(sx, 1);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      stops.forEach(s => g.addColorStop(s[0], s[1]));
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill(); ctx.restore();
+    }
+    const map = new THREE.CanvasTexture(color), bumpMap = new THREE.CanvasTexture(bump);
+    map.anisotropy = bumpMap.anisotropy = 4;
+    return { map, bumpMap };
+  }
+
+  /* ================= Escena básica ================= */
+  const canvas = document.getElementById('scene');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setClearColor(0x000000, 0);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1200);
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ================= Luna ================= */
+  const moonGroup = new THREE.Group();
+  scene.add(moonGroup);
+  const tex = buildMoonTextures();
+  const moon = new THREE.Mesh(
+    new THREE.SphereGeometry(1.5, 96, 96),
+    new THREE.MeshStandardMaterial({ map: tex.map, bumpMap: tex.bumpMap, bumpScale: 2.2, roughness: 1, metalness: 0 })
+  );
+  moonGroup.add(moon);
+
+  // Halo suave alrededor de la Luna (sprite aditivo con degradado radial)
+  function glowTexture(inner, outer) {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const x = c.getContext('2d'), g = x.createRadialGradient(128, 128, 0, 128, 128, 128);
+    g.addColorStop(0, inner); g.addColorStop(.35, outer); g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 256, 256);
+    return new THREE.CanvasTexture(c);
+  }
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture('rgba(200,210,255,.55)', 'rgba(120,110,255,.16)'),
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  halo.scale.set(7.5, 7.5, 1); halo.position.z = -1.2;
+  moonGroup.add(halo);
+  const aura = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture('rgba(110,90,220,.25)', 'rgba(60,50,150,.08)'),
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  aura.scale.set(14, 14, 1); aura.position.z = -2;
+  moonGroup.add(aura);
+
+  // Iluminación: luz principal cálida, contraluz violeta y relleno azul tenue
+  const sun = new THREE.DirectionalLight(0xfff4e6, 2.3); sun.position.set(-4, 2.5, 4); scene.add(sun);
+  const rim = new THREE.DirectionalLight(0x7a63ff, 1.4); rim.position.set(5, -1, -3); scene.add(rim);
+  scene.add(new THREE.AmbientLight(0x2a3366, 0.55));
+
+  /* ================= Estrellas y polvo espacial ================= */
+  const starVert = `
+    attribute float aSize; attribute float aPhase; attribute float aTw; attribute vec3 aColor;
+    uniform float uTime; uniform float uPR;
+    varying float vA; varying vec3 vC;
+    void main() {
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      float tw = aTw > 0.5 ? 0.55 + 0.45 * sin(uTime * (0.6 + aPhase * 0.5) + aPhase * 40.0) : 1.0;
+      vA = tw; vC = aColor;
+      gl_PointSize = aSize * uPR * (0.8 + 0.2 * tw);
+      gl_Position = projectionMatrix * mv;
+    }`;
+  const starFrag = `
+    uniform float uAlpha; varying float vA; varying vec3 vC;
+    void main() {
+      float d = length(gl_PointCoord - 0.5);
+      float a = smoothstep(0.5, 0.0, d);
+      gl_FragColor = vec4(vC, a * a * vA * uAlpha);
+    }`;
+  const palette = [[1, 1, 1], [.78, .85, 1], [.85, .78, 1], [1, .95, .85]];
+
+  function makeStarField(count, rMin, rMax, sMin, sMax, alpha, twinkleChance) {
+    const pos = new Float32Array(count * 3), size = new Float32Array(count), phase = new Float32Array(count),
+          tw = new Float32Array(count), col = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      // Distribución esférica con profundidad variable
+      const r = rMin + Math.random() * (rMax - rMin), th = Math.random() * 6.2832, ph = Math.acos(2 * Math.random() - 1);
+      pos.set([r * Math.sin(ph) * Math.cos(th), r * Math.sin(ph) * Math.sin(th), r * Math.cos(ph)], i * 3);
+      size[i] = sMin + Math.pow(Math.random(), 3) * (sMax - sMin);
+      phase[i] = Math.random(); tw[i] = Math.random() < twinkleChance ? 1 : 0;
+      col.set(palette[(Math.random() * palette.length) | 0], i * 3);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    geo.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+    geo.setAttribute('aTw', new THREE.BufferAttribute(tw, 1));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: starVert, fragmentShader: starFrag, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: { uTime: { value: 0 }, uPR: { value: 1 }, uAlpha: { value: alpha } } });
+    const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; scene.add(pts);
+    return pts;
+  }
+  const isSmall = innerWidth < 700;
+  const starsFar  = makeStarField(isSmall ? 1100 : 2200, 300, 600, 1.5, 4.5, 1.0, .35);
+  const starsNear = makeStarField(isSmall ? 160 : 320, 60, 160, 2.5, 7, 0.9, .5);
+  const dust      = makeStarField(isSmall ? 40 : 90, 15, 70, 14, 34, 0.12, .3);   // partículas grandes y difusas
+  const fields = [starsFar, starsNear, dust];
+
+  /* ================= Interacción ================= */
+  const mouse = { x: 0, y: 0 }, smooth = { x: 0, y: 0 };
+  function setPointer(cx, cy) { mouse.x = (cx / innerWidth) * 2 - 1; mouse.y = (cy / innerHeight) * 2 - 1; }
+  addEventListener('pointermove', e => setPointer(e.clientX, e.clientY));
+
+  // Chispas luminosas al tocar/hacer clic
+  addEventListener('pointerdown', e => {
+    setPointer(e.clientX, e.clientY);
+    for (let i = 0; i < 14; i++) {
+      const s = document.createElement('div'), a = Math.random() * 6.2832, d = 25 + Math.random() * 70, sz = 2 + Math.random() * 4;
+      s.className = 'spark';
+      s.style.cssText = `left:${e.clientX}px;top:${e.clientY}px;width:${sz}px;height:${sz}px;` +
+        `--dx:${Math.cos(a) * d}px;--dy:${Math.sin(a) * d + 18}px;animation-duration:${1.2 + Math.random() * .9}s`;
+      document.body.appendChild(s);
+      setTimeout(() => s.remove(), 2200);
+    }
+  });
+
+  /* ================= Responsive ================= */
+  let baseY = .4;
+  function resize() {
+    const w = innerWidth, h = innerHeight, pr = Math.min(devicePixelRatio || 1, 2);
+    renderer.setPixelRatio(pr); renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.position.z = Math.max(6.2, 5.4 / camera.aspect);   // la Luna siempre cabe en pantalla
+    baseY = camera.aspect < 1 ? .75 : .45;                     // deja espacio a la frase
+    camera.updateProjectionMatrix();
+    fields.forEach(f => f.material.uniforms.uPR.value = pr);
+  }
+  addEventListener('resize', resize); resize();
+
+  /* ================= Bucle de animación ================= */
+  const clock = new THREE.Clock();
+  const move = reduceMotion ? 0 : 1;
+  function tick() {
+    const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+    smooth.x += (mouse.x - smooth.x) * Math.min(1, dt * 2.2);   // suavizado del cursor
+    smooth.y += (mouse.y - smooth.y) * Math.min(1, dt * 2.2);
+
+    moon.rotation.y += dt * .05 * move;                         // rotación lenta
+    moonGroup.position.y = baseY + Math.sin(t * .55) * .07 * move; // flotación suave
+    moonGroup.position.x = smooth.x * .18;                      // paralaje de la Luna
+    moonGroup.rotation.x = smooth.y * .08; moonGroup.rotation.y = smooth.x * .1;
+    halo.material.opacity = .9 + Math.sin(t * .8) * .1;
+
+    // Estrellas: deriva muy lenta + reacción al mouse (más lejos = menos movimiento)
+    starsFar.rotation.y  = t * .004 * move + smooth.x * .015;  starsFar.rotation.x  = smooth.y * .01;
+    starsNear.rotation.y = t * .008 * move + smooth.x * .035;  starsNear.rotation.x = smooth.y * .02;
+    dust.rotation.y      = t * .012 * move + smooth.x * .06;   dust.rotation.x      = smooth.y * .04 + t * .003 * move;
+    fields.forEach(f => f.material.uniforms.uTime.value = t);
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>
